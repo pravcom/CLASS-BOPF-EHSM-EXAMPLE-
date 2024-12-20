@@ -1,0 +1,486 @@
+CLASS zcl_tmp_rabdryashito DEFINITION
+  PUBLIC
+  FINAL
+  CREATE PUBLIC .
+
+  PUBLIC SECTION.
+    TYPES: BEGIN OF mty_s_mpl,
+             loc_root_ref_key TYPE ehfnd_location_key_ref,
+             par_root_ref_key TYPE ehfnd_location_key_ref,
+             parent_key       TYPE  /bobf/conf_key,
+             id               TYPE ehfnd_loc_id, "UID Местоположения (Номер Местоположения)
+             loc_text         TYPE ehfnd_loc_revision_text, "Наименование Местоположения
+             loc_desc_key_ref TYPE /bobf/text_content, "Описание Местоположения
+             par_loc_text     TYPE ehfnd_loc_revision_text, "Родитель (Группа)
+             par_id           TYPE ehfnd_loc_id, "UID Группы
+**             type             TYPE text50,  "Тип Местоположения
+           END OF mty_s_mpl,
+
+           mty_t_mpl TYPE TABLE OF mty_s_mpl WITH DEFAULT KEY.
+
+    METHODS constructor IMPORTING iv_id TYPE ehfnd_loc_id.
+    METHODS run.
+    METHODS display.
+    METHODS modify_ehfnd_rev_status
+      IMPORTING
+        iv_status TYPE EHFND_LOC_STATUS
+        iv_key  TYPE /BOBF/CONF_KEY.
+    METHODs modify_by_association
+      IMPORTING
+        iv_text TYPE string
+        iv_key TYPE /BOBF/CONF_KEY.
+
+    METHODs modify_by_create
+      IMPORTING
+        iv_data TYPE EHFNDS_LOC_ROOT.
+
+    METHODs modify_by_delete
+      IMPORTING
+        iv_key TYPE /BOBF/CONF_KEY.
+
+  PROTECTED SECTION.
+  PRIVATE SECTION.
+    DATA: mo_srv_mng_ehfnd_location TYPE REF TO /bobf/if_tra_service_manager
+          ,mo_srv_mng_ehfnd_location_str TYPE REF TO /bobf/if_tra_service_manager
+          ,mo_transaction_manager TYPE REF TO /bobf/if_tra_transaction_mgr
+          ,mt_tree_mpl TYPE mty_t_mpl
+          ,mv_id TYPE ehfnd_loc_id
+          .
+
+    METHODS get_hierarchy_children
+      IMPORTING
+                it_key           TYPE /bobf/t_frw_key
+                it_mpl           TYPE mty_t_mpl
+      RETURNING VALUE(rt_return) TYPE mty_t_mpl.
+
+    METHODS get_ehfnd_location_root_by_id
+      IMPORTING
+                iv_id                         TYPE ehfnd_loc_id
+      RETURNING VALUE(rt_ehfnd_location_root) TYPE ehfndt_loc_root.
+
+    METHODS get_ehfnd_location_current_rev
+      IMPORTING
+                it_key                     TYPE /bobf/t_frw_key
+      RETURNING VALUE(rt_current_revision) TYPE ehfndt_loc_revision.
+
+    METHODS get_hier_by_par_root_ref_key
+      IMPORTING
+                iv_par_root_ref_key TYPE /bobf/conf_key
+      RETURNING VALUE(rt_hierarchy) TYPE ehfndt_lhr_hierarchy.
+
+    METHODS get_revision_name_text_by_assc
+      IMPORTING
+                it_key              TYPE /bobf/t_frw_key
+      RETURNING VALUE(rt_name_text) TYPE ehfndt_loc_revision_name_text.
+
+    METHODS get_ehfnd_location_root
+      IMPORTING
+                it_key         TYPE /bobf/t_frw_key
+      RETURNING VALUE(rt_root) TYPE ehfndt_loc_root.
+
+ENDCLASS.
+
+
+
+CLASS ZCL_TMP_RABDRYASHITO IMPLEMENTATION.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->CONSTRUCTOR
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_ID                          TYPE        EHFND_LOC_ID
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD constructor.
+* Создаем Service Manager и Transaction manager
+    mo_srv_mng_ehfnd_location = /bobf/cl_tra_serv_mgr_factory=>get_service_manager( if_ehfnd_loc_c=>sc_bo_key ).
+    mo_srv_mng_ehfnd_location_str = /bobf/cl_tra_serv_mgr_factory=>get_service_manager( if_ehfnd_lhr_c=>sc_bo_key ).
+    mo_transaction_manager = /bobf/cl_tra_trans_mgr_factory=>get_transaction_manager( ).
+
+    mv_id = iv_id.
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->DISPLAY
+* +-------------------------------------------------------------------------------------------------+
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD display.
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING
+            r_salv_table = DATA(lo_salv)
+          CHANGING
+            t_table = mt_tree_mpl ).
+      CATCH cx_salv_msg.
+        RETURN.
+    ENDTRY.
+
+    lo_salv->get_columns( )->get_column( 'PAR_ROOT_REF_KEY' )->set_technical( abap_true ).
+    lo_salv->get_columns( )->get_column( 'LOC_ROOT_REF_KEY' )->set_technical( abap_true ).
+    lo_salv->get_columns( )->get_column( 'PARENT_KEY' )->set_technical( abap_true ).
+    lo_salv->get_columns( )->get_column( 'PAR_LOC_TEXT' )->set_long_text( 'Род. текст' ).
+    lo_salv->get_columns( )->get_column( 'PAR_LOC_TEXT' )->set_medium_text( 'Род. текст' ).
+    lo_salv->get_columns( )->get_column( 'PAR_LOC_TEXT' )->set_short_text( 'Род. текст' ).
+    lo_salv->get_columns( )->get_column( 'PAR_ID' )->set_long_text( 'Род. местоположение' ).
+    lo_salv->get_columns( )->get_column( 'PAR_ID' )->set_medium_text( 'Род. местоположение' ).
+    lo_salv->get_columns( )->get_column( 'PAR_ID' )->set_short_text( 'Род. мест' ).
+    lo_salv->get_columns( )->set_optimize( abap_true ).
+    lo_salv->get_functions( )->set_default( abap_true ).
+    lo_salv->display( ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_TMP_RABDRYASHITO->GET_EHFND_LOCATION_CURRENT_REV
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IT_KEY                         TYPE        /BOBF/T_FRW_KEY
+* | [<-()] RT_CURRENT_REVISION            TYPE        EHFNDT_LOC_REVISION
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD get_ehfnd_location_current_rev.
+    mo_srv_mng_ehfnd_location->retrieve_by_association(
+        EXPORTING
+        iv_node_key = if_ehfnd_loc_c=>sc_node-root
+        it_key = it_key
+        iv_association = if_ehfnd_loc_c=>sc_association-root-current_revision
+        iv_fill_data = abap_true
+      IMPORTING
+        et_data = rt_current_revision
+        et_target_key = DATA(lt_key_revision)
+        eo_message = DATA(lo_message) ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_TMP_RABDRYASHITO->GET_EHFND_LOCATION_ROOT
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IT_KEY                         TYPE        /BOBF/T_FRW_KEY
+* | [<-()] RT_ROOT                        TYPE        EHFNDT_LOC_ROOT
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD get_ehfnd_location_root.
+    mo_srv_mng_ehfnd_location->retrieve(
+      EXPORTING
+        it_key = it_key
+        iv_node_key = if_ehfnd_loc_c=>sc_node-root
+        iv_fill_data = abap_true
+      IMPORTING
+        et_data = rt_root ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_TMP_RABDRYASHITO->GET_EHFND_LOCATION_ROOT_BY_ID
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_ID                          TYPE        EHFND_LOC_ID
+* | [<-()] RT_EHFND_LOCATION_ROOT         TYPE        EHFNDT_LOC_ROOT
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD get_ehfnd_location_root_by_id.
+    DATA: lt_sel_param TYPE /bobf/t_frw_query_selparam.
+
+    lt_sel_param = VALUE #( ( attribute_name = if_ehfnd_loc_c=>sc_node_attribute-root-id
+                              sign = 'I'
+                              option = 'EQ'
+                              low = mv_id ) ).
+
+    mo_srv_mng_ehfnd_location->query(
+      EXPORTING
+        iv_query_key = if_ehfnd_loc_c=>sc_query-root-select_by_elements
+        it_selection_parameters = lt_sel_param
+        iv_fill_data = abap_true
+      IMPORTING
+        et_key = DATA(lt_root_key)
+        et_data = rt_ehfnd_location_root
+        es_query_info = DATA(ls_query_info)
+        eo_message = DATA(lo_message) ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_TMP_RABDRYASHITO->GET_HIERARCHY_CHILDREN
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IT_KEY                         TYPE        /BOBF/T_FRW_KEY
+* | [--->] IT_MPL                         TYPE        MTY_T_MPL
+* | [<-()] RT_RETURN                      TYPE        MTY_T_MPL
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD get_hierarchy_children.
+    DATA lt_hierarchy TYPE ehfndt_lhr_hierarchy.
+
+    mo_srv_mng_ehfnd_location_str->retrieve_by_association(
+      EXPORTING
+        iv_node_key = if_ehfnd_lhr_c=>sc_node-hierarchy
+        it_key = it_key
+        iv_association = if_ehfnd_lhr_c=>sc_association-hierarchy-child_hierarchy
+        iv_fill_data = abap_true
+      IMPORTING
+        et_data = lt_hierarchy
+        et_target_key = DATA(lt_key_hierarchy)
+        eo_message = DATA(lo_message) ).
+
+    CHECK lt_hierarchy IS NOT INITIAL.
+
+    "Получаем EHNFD_LOCATION-ROOT используя связь:
+    "EHFND_LOCATION_STRUCTURE-HIERARCHY-LOC_ROOT_REF_KEY = EHFND_LOCATION-ROOT-KEY
+    DATA(lt_ehfnd_location_root_key) = VALUE /bobf/t_frw_key( FOR ls_hierarchy IN lt_hierarchy
+                                       ( key = ls_hierarchy-loc_root_ref_key ) ).
+
+    DATA(lt_ehfnd_loc_root) = get_ehfnd_location_root( lt_ehfnd_location_root_key ).
+
+    "Получаем данные EHFND_LOCATION-CURRENT_REVISION
+    DATA(lt_ehfnd_location_rev) = get_ehfnd_location_current_rev( lt_ehfnd_location_root_key ).
+
+    "Получаем EHFND_LOCATION-REVISION_NAME_TEXT
+    DATA(lt_current_revision_key) = VALUE /bobf/t_frw_key( FOR ls_current_revision IN lt_ehfnd_location_rev
+                                                         ( key = ls_current_revision-key ) ).
+    DATA(lt_name_text) = get_revision_name_text_by_assc( lt_current_revision_key ).
+
+    "Заполняем итоговый шаблон
+    DATA ls_tree_mpl LIKE LINE OF mt_tree_mpl.
+    DATA lt_tree_mpl LIKE mt_tree_mpl.
+
+    LOOP AT lt_hierarchy ASSIGNING FIELD-SYMBOL(<ls_hierarchy>).
+      ls_tree_mpl-par_root_ref_key = <ls_hierarchy>-par_root_ref_key.
+      ls_tree_mpl-loc_root_ref_key = <ls_hierarchy>-loc_root_ref_key.
+      ls_tree_mpl-parent_key = <ls_hierarchy>-parent_key.
+
+      READ TABLE lt_ehfnd_loc_root ASSIGNING FIELD-SYMBOL(<ls_ehfnd_loc_root>) WITH KEY key COMPONENTS key = <ls_hierarchy>-loc_root_ref_key.
+      IF sy-subrc = 0.
+        ls_tree_mpl-id = <ls_ehfnd_loc_root>-id.
+
+        READ TABLE lt_ehfnd_location_rev ASSIGNING FIELD-SYMBOL(<ls_ehfnd_location_rev>) WITH KEY parent_key COMPONENTS parent_key = <ls_ehfnd_loc_root>-key.
+        IF sy-subrc = 0.
+          ls_tree_mpl-loc_desc_key_ref = <ls_ehfnd_location_rev>-desc_text.
+
+          READ TABLE lt_name_text ASSIGNING FIELD-SYMBOL(<ls_name_text>) WITH KEY parent_key COMPONENTS parent_key = <ls_ehfnd_location_rev>-key.
+          IF sy-subrc = 0.
+            ls_tree_mpl-loc_text = <ls_name_text>-text.
+          ENDIF.
+
+        ENDIF.
+      ENDIF.
+
+      READ TABLE it_mpl ASSIGNING FIELD-SYMBOL(<ls_mpl>) WITH KEY loc_root_ref_key = <ls_hierarchy>-par_root_ref_key
+                                                                  parent_key = <ls_hierarchy>-parent_key.
+      IF sy-subrc = 0.
+        ls_tree_mpl-par_id = <ls_mpl>-id.
+        ls_tree_mpl-par_loc_text = <ls_mpl>-loc_desc_key_ref.
+      ENDIF.
+
+      APPEND ls_tree_mpl TO lt_tree_mpl.
+    ENDLOOP.
+
+    IF lt_tree_mpl IS NOT INITIAL.
+      DATA(lt_child) = get_hierarchy_children( it_key = lt_key_hierarchy it_mpl = lt_tree_mpl ).
+      APPEND LINES OF lt_tree_mpl TO rt_return.
+      APPEND LINES OF lt_child TO rt_return.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_TMP_RABDRYASHITO->GET_HIER_BY_PAR_ROOT_REF_KEY
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_PAR_ROOT_REF_KEY            TYPE        /BOBF/CONF_KEY
+* | [<-()] RT_HIERARCHY                   TYPE        EHFNDT_LHR_HIERARCHY
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD get_hier_by_par_root_ref_key.
+    DATA(lt_sel_param) = VALUE /bobf/t_frw_query_selparam(
+                            ( attribute_name = if_ehfnd_lhr_c=>sc_node_attribute-hierarchy-loc_root_ref_key
+                              sign = 'I'
+                              option = 'EQ'
+                              low = iv_par_root_ref_key ) ).
+
+    mo_srv_mng_ehfnd_location_str->query(
+      EXPORTING
+        iv_query_key = if_ehfnd_lhr_c=>sc_query-hierarchy-select_by_elements
+        it_selection_parameters = lt_sel_param
+        iv_fill_data = abap_true
+      IMPORTING
+        et_key = DATA(lt_hier_key)
+        et_data = rt_hierarchy
+        es_query_info = DATA(ls_query_info)
+        eo_message = DATA(lo_message) ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_TMP_RABDRYASHITO->GET_REVISION_NAME_TEXT_BY_ASSC
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IT_KEY                         TYPE        /BOBF/T_FRW_KEY
+* | [<-()] RT_NAME_TEXT                   TYPE        EHFNDT_LOC_REVISION_NAME_TEXT
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD get_revision_name_text_by_assc.
+    mo_srv_mng_ehfnd_location->retrieve_by_association(
+        EXPORTING
+        iv_node_key = if_ehfnd_loc_c=>sc_node-revision
+        it_key = it_key
+        iv_association = if_ehfnd_loc_c=>sc_association-revision-revision_name_text
+        iv_fill_data = abap_true
+      IMPORTING
+        et_data = rt_name_text
+        et_target_key = DATA(lt_key_revision)
+        eo_message = DATA(lo_message) ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->MODIFY_BY_ASSOCIATION
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_TEXT                        TYPE        STRING
+* | [--->] IV_KEY                         TYPE        /BOBF/CONF_KEY
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD modify_by_association.
+    DATA: lt_mod TYPE /bobf/t_frw_modification.
+
+    lt_mod = VALUE #( ( change_mode = /bobf/if_frw_c=>sc_modify_association
+**                        node = if_ehfnd_loc_c=>sc_node-revision_name_text
+                        source_node = if_ehfnd_loc_c=>sc_node-revision
+                        source_key = iv_key
+**                        root_key = iv_key
+                        data = NEW EHFNDS_LOC_REVISION_NAME_TEXT( text = iv_text )
+                        association = if_ehfnd_loc_c=>sc_association-revision-revision_name_text
+                        changed_fields = VALUE #( ( if_ehfnd_loc_c=>sc_node_attribute-revision_name_text-text ) )
+                        ) ).
+
+    mo_srv_mng_ehfnd_location->modify(
+      EXPORTING
+        it_modification = lt_mod
+        IMPORTING
+          eo_change = DATA(lo_change)
+          eo_message = DATA(lo_message) ).
+
+
+     mo_transaction_manager->save( ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->MODIFY_BY_CREATE
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_DATA                        TYPE        EHFNDS_LOC_ROOT
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD modify_by_create.
+    DATA: lt_mod TYPE /bobf/t_frw_modification
+          ,lo_data TYPE REF TO EHFNDS_LOC_ROOT.
+
+    DATA(lv_key) = /bobf/cl_frw_factory=>get_new_key( ).
+
+    CREATE DATA lo_data.
+
+    lo_data->key = iv_data-key.
+    lo_data->id = iv_data-id.
+
+    lt_mod = VALUE #( ( change_mode = /bobf/if_frw_c=>sc_modify_create
+                        node = if_ehfnd_loc_c=>sc_node-root
+                        key = lv_key
+                        data = lo_data
+                        ) ).
+
+    mo_srv_mng_ehfnd_location->modify(
+      EXPORTING
+        it_modification = lt_mod
+        IMPORTING
+          eo_change = DATA(lo_change)
+          eo_message = DATA(lo_message) ).
+
+
+     mo_transaction_manager->save( ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->MODIFY_BY_DELETE
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_KEY                         TYPE        /BOBF/CONF_KEY
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD modify_by_delete.
+    DATA: lt_mod TYPE /bobf/t_frw_modification
+.
+
+    lt_mod = VALUE #( ( change_mode = /bobf/if_frw_c=>sc_modify_delete
+                        node = if_ehfnd_loc_c=>sc_node-root
+                        key = iv_key
+                        ) ).
+
+    mo_srv_mng_ehfnd_location->modify(
+      EXPORTING
+        it_modification = lt_mod
+        IMPORTING
+          eo_change = DATA(lo_change)
+          eo_message = DATA(lo_message) ).
+
+
+     mo_transaction_manager->save( ).
+  endmethod.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->MODIFY_EHFND_REV_STATUS
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IV_STATUS                      TYPE        EHFND_LOC_STATUS
+* | [--->] IV_KEY                         TYPE        /BOBF/CONF_KEY
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD modify_ehfnd_rev_status.
+    DATA: lt_mod TYPE /bobf/t_frw_modification.
+
+    lt_mod = VALUE #( ( change_mode = /bobf/if_frw_c=>sc_modify_update
+                        node = if_ehfnd_loc_c=>sc_node-revision
+                        key = iv_key
+                        data = NEW EHFNDS_LOC_REVISION( status = iv_status )
+                        changed_fields = VALUE #( ( if_ehfnd_loc_c=>sc_node_attribute-revision-status ) )
+                        ) ).
+
+    mo_srv_mng_ehfnd_location->modify(
+      EXPORTING
+        it_modification = lt_mod
+        IMPORTING
+          eo_change = DATA(lo_change)
+          eo_message = DATA(lo_message) ).
+
+
+     mo_transaction_manager->save( ).
+  ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_TMP_RABDRYASHITO->RUN
+* +-------------------------------------------------------------------------------------------------+
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD run.
+    DATA(lt_ehfnd_location_root) = get_ehfnd_location_root_by_id( mv_id ).
+
+    DATA(lt_ehfnd_location_root_key) = VALUE /bobf/t_frw_key( FOR ls_root IN lt_ehfnd_location_root
+                                       ( key = ls_root-key ) ).
+    "Получаем данные EHFND_LOCATION-CURRENT_REVISION
+    DATA(lt_ehfnd_location_rev) = get_ehfnd_location_current_rev( lt_ehfnd_location_root_key ).
+
+    "Получаем EHFND_LOCATION-REVISION_NAME_TEXT
+    DATA(lt_current_revision_key) = VALUE /bobf/t_frw_key( FOR ls_current_revision IN lt_ehfnd_location_rev
+                                                         ( key = ls_current_revision-key ) ).
+    DATA(lt_name_text) = get_revision_name_text_by_assc( lt_current_revision_key ).
+
+*Идем в БО EHFND_LOCATION_STRUCTURE узел HIERARCHY по следющему условию:
+* EHFND_LOCATION-ROOT-KEY = EHFND_LOCATION_STRUCTURE-HIERARCHY-PAR_ROOT_REF_KEY
+    DATA(lv_actual_root_key) = VALUE /bobf/conf_key( lt_ehfnd_location_rev[ 1 ]-root_key OPTIONAL ).
+
+    DATA(lt_hierarchy) = get_hier_by_par_root_ref_key( lv_actual_root_key ).
+
+    "Заполняем итоговый шаблон
+    DATA ls_tree_mpl LIKE LINE OF mt_tree_mpl.
+    ls_tree_mpl = VALUE #(
+                           par_root_ref_key = VALUE #( lt_hierarchy[ 1 ]-par_root_ref_key OPTIONAL )
+                           loc_root_ref_key = VALUE #( lt_hierarchy[ 1 ]-loc_root_ref_key OPTIONAL )
+                           parent_key = VALUE #( lt_hierarchy[ 1 ]-parent_key OPTIONAL )
+                           id = mv_id
+                           loc_text = VALUE #( lt_name_text[ 1 ]-text OPTIONAL )
+                           loc_desc_key_ref = VALUE #( lt_ehfnd_location_rev[ 1 ]-desc_text OPTIONAL )
+                           par_id = ''
+                           par_loc_text = ''
+                           ).
+
+    APPEND ls_tree_mpl TO mt_tree_mpl.
+    DATA(lt_child) = get_hierarchy_children( it_key = VALUE #( FOR ls_hierarchy IN lt_hierarchy ( key = ls_hierarchy-key ) )
+                                             it_mpl = mt_tree_mpl ).
+
+    APPEND LINES OF lt_child TO mt_tree_mpl.
+  ENDMETHOD.
+ENDCLASS.
